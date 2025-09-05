@@ -16,8 +16,7 @@
 #define TIMEOUT_SEC 2
 
 // Initialize socket and set up server address
-int init(const char *server_ip, int server_port, int *client_socket, struct sockaddr_in *server_address){
-
+int init(const char *server_ip, int server_port, int *client_socket, struct sockaddr_in *server_address, int *local_port){
   // Create a UDP socket. SOCK_DGRAM specifies a datagram socket.
   if ((*client_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0){
     perror("socket(2)");
@@ -37,26 +36,49 @@ int init(const char *server_ip, int server_port, int *client_socket, struct sock
     return 0;
   }
 
+  // Get the local port assigned to the socket
+  struct sockaddr_in local_address;
+  socklen_t len = sizeof(local_address);
+  if (getsockname(*client_socket, (struct sockaddr *)&local_address, &len) < 0){
+    perror("getsockname(2)");
+    *local_port = 0; // Use ephemeral port
+  }
+  else {
+    *local_port = ntohs(local_address.sin_port);
+    printf("Client using local port: %d\n", *local_port);
+  }
+
   return 1;
 }
 
+// Helper function to initialize a packet with default values
+void init_packet(packet *pkt, uint16_t src_port, uint16_t dst_port) {
+  memset(pkt, 0, sizeof(packet));
+  pkt->source_port = src_port;
+  pkt->dest_port = dst_port;
+  pkt->data_offset = 5; // 5 x 4 bytes = 20 bytes (standard TCP header size)
+  pkt->window_size = 1024;
+  pkt->urgent_pointer = 0;
+  pkt->payload[0] = '\0';
+}
+
 // Perform three-way handshake with server
-int connect(int client_socket, struct sockaddr_in *server_address){
+int connect(int client_socket, struct sockaddr_in *server_address, int local_port, int server_port) {
   // Create a SYN packet to initiate the handshake.
   packet syn_packet;
+  init_packet(&syn_packet, local_port, server_port);
   syn_packet.seq_num = rand();
   syn_packet.ack_num = 0;
   syn_packet.flags = SYN;
+  syn_packet.checksum = calculate_checksum(&syn_packet);
 
   int retries = 0;
   int handshake_complete = 0;
 
-  while (retries < MAX_RETRIES && !handshake_complete)
-  {
+  while (retries < MAX_RETRIES && !handshake_complete){
     // Send the SYN packet to the server.
     if (sendto(client_socket, &syn_packet, sizeof(syn_packet), 0,
-               (const struct sockaddr *)server_address, sizeof(*server_address)) < 0)
-    {
+               (const struct sockaddr *)server_address, sizeof(*server_address)) < 0){
       perror("sendto(2)");
       retries++;
       continue;
@@ -96,6 +118,15 @@ int connect(int client_socket, struct sockaddr_in *server_address){
       continue;
     }
 
+    // Verify checksum
+    uint16_t received_checksum = received_synack.checksum;
+    received_synack.checksum = 0;
+    if (calculate_checksum(&received_synack) != received_checksum){
+      printf("Checksum verification failed. Packet might be corrupted.\n");
+      retries++;
+      continue;
+    }
+
     // Check for the SYN-ACK flags
     if ((received_synack.flags & SYN) && (received_synack.flags & ACK)){
       printf("Received SYN-ACK from server. Server Seq: %u, Server Ack: %u\n",
@@ -103,9 +134,11 @@ int connect(int client_socket, struct sockaddr_in *server_address){
 
       // Send the final ACK to complete the handshake.
       packet final_ack_packet;
+      init_packet(&final_ack_packet, local_port, server_port);
       final_ack_packet.seq_num = received_synack.ack_num;
       final_ack_packet.ack_num = received_synack.seq_num + 1;
       final_ack_packet.flags = ACK;
+      final_ack_packet.checksum = calculate_checksum(&final_ack_packet);
 
       printf("Sending final ACK to server...\n");
       if (sendto(client_socket, &final_ack_packet, sizeof(final_ack_packet), 0,
@@ -131,20 +164,22 @@ int connect(int client_socket, struct sockaddr_in *server_address){
 }
 
 // Perform four-way handshake to terminate connection
-int terminate(int client_socket, struct sockaddr_in *server_address) {
+int terminate(int client_socket, struct sockaddr_in *server_address, int local_port, int server_port){
   int termination_complete = 0;
   int retries = 0;
 
   // Send FIN packet to initiate termination
   packet fin_packet;
+  init_packet(&fin_packet, local_port, server_port);
   fin_packet.seq_num = rand();
   fin_packet.ack_num = 0;
   fin_packet.flags = FIN;
+  fin_packet.checksum = calculate_checksum(&fin_packet);
 
   while (retries < MAX_RETRIES && !termination_complete) {
     printf("Initiating connection termination. Sending FIN...\n");
     if (sendto(client_socket, &fin_packet, sizeof(fin_packet), 0,
-                (const struct sockaddr *)server_address, sizeof(*server_address)) < 0) {
+               (const struct sockaddr *)server_address, sizeof(*server_address)) < 0){
       perror("sendto(2)");
       retries++;
       continue;
@@ -159,8 +194,10 @@ int terminate(int client_socket, struct sockaddr_in *server_address) {
 
     int sel = select(client_socket + 1, &read_fds, NULL, NULL, &timeout);
 
-    if (sel < 0) {
-      if (errno == EINTR) { continue; }
+    if (sel < 0){
+      if (errno == EINTR){
+        continue;
+      }
       perror("select(2)");
       break;
     } else if (sel == 0) {
@@ -173,7 +210,7 @@ int terminate(int client_socket, struct sockaddr_in *server_address) {
     packet received_finack;
     socklen_t len = sizeof(*server_address);
     int n = recvfrom(client_socket, &received_finack, sizeof(received_finack), 0,
-                      (struct sockaddr *)server_address, &len);
+                     (struct sockaddr *)server_address, &len);
 
     if (n < 0) {
       perror("recvfrom(2)");
@@ -181,18 +218,29 @@ int terminate(int client_socket, struct sockaddr_in *server_address) {
       continue;
     }
 
+    // Verify checksum
+    uint16_t received_checksum = received_finack.checksum;
+    received_finack.checksum = 0;
+    if (calculate_checksum(&received_finack) != received_checksum){
+      printf("Checksum verification failed. Packet might be corrupted.\n");
+      retries++;
+      continue;
+    }
+
     // Check if the received packet has both FIN and ACK flags set
     if ((received_finack.flags & FIN) && (received_finack.flags & ACK)) {
       printf("Received FIN-ACK from server. Sending final ACK...\n");
-      
+
       // Send final ACK to complete the handshake
       packet final_ack;
+      init_packet(&final_ack, local_port, server_port);
       final_ack.seq_num = received_finack.ack_num;
-      final_ack.ack_num = received_finack.seq_num + 1; 
+      final_ack.ack_num = received_finack.seq_num + 1;
       final_ack.flags = ACK;
+      final_ack.checksum = calculate_checksum(&final_ack);
 
       if (sendto(client_socket, &final_ack, sizeof(final_ack), 0,
-                  (const struct sockaddr *)server_address, len) < 0) {
+                 (const struct sockaddr *)server_address, len) < 0){
         perror("sendto(2)");
         retries++;
         continue;
@@ -200,8 +248,7 @@ int terminate(int client_socket, struct sockaddr_in *server_address) {
 
       termination_complete = 1;
       printf("Four-way termination handshake complete. Connection closed.\n");
-    }
-    else {
+    } else {
       printf("Received an unexpected packet type during termination. Retrying...\n");
       retries++;
       continue;
@@ -212,7 +259,7 @@ int terminate(int client_socket, struct sockaddr_in *server_address) {
     printf("Connection termination failed after %d retries.\n", MAX_RETRIES);
     return 0;
   }
-  
+
   return 1;
 }
 
@@ -220,6 +267,7 @@ int main(int argc, char *argv[]){
   srand(time(NULL));
   int client_socket;
   struct sockaddr_in server_address;
+  int local_port;
 
   const char *server_ip;
   int server_port;
@@ -235,11 +283,11 @@ int main(int argc, char *argv[]){
     printf("No arguments provided. Using default values: %s:%d\n", server_ip, server_port);
   }
 
-  if (!init(server_ip, server_port, &client_socket, &server_address)){
+  if (!init(server_ip, server_port, &client_socket, &server_address, &local_port)){
     return 1;
   }
 
-  if (!connect(client_socket, &server_address)){
+  if (!connect(client_socket, &server_address, local_port, server_port)){
     close(client_socket);
     return 1;
   }
@@ -247,7 +295,7 @@ int main(int argc, char *argv[]){
   // <exchange data>
 
   // Close the connection:
-  if (!terminate(client_socket, &server_address)){
+  if (!terminate(client_socket, &server_address, local_port, server_port)){
     printf("Failed to gracefully terminate the connection.\n");
   }
 
