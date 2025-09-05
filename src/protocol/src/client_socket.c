@@ -16,12 +16,10 @@
 #define TIMEOUT_SEC 2
 
 // Initialize socket and set up server address
-int initialize_socket(const char *server_ip, int server_port, int *client_socket, struct sockaddr_in *server_address)
-{
+int init(const char *server_ip, int server_port, int *client_socket, struct sockaddr_in *server_address){
 
   // Create a UDP socket. SOCK_DGRAM specifies a datagram socket.
-  if ((*client_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-  {
+  if ((*client_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0){
     perror("socket(2)");
     return 0;
   }
@@ -33,8 +31,7 @@ int initialize_socket(const char *server_ip, int server_port, int *client_socket
   server_address->sin_family = AF_INET;
   server_address->sin_port = htons(server_port);
 
-  if (inet_pton(AF_INET, server_ip, &server_address->sin_addr) <= 0)
-  {
+  if (inet_pton(AF_INET, server_ip, &server_address->sin_addr) <= 0){
     perror("inet_pton(2)");
     close(*client_socket);
     return 0;
@@ -44,11 +41,10 @@ int initialize_socket(const char *server_ip, int server_port, int *client_socket
 }
 
 // Perform three-way handshake with server
-int perform_handshake(int client_socket, struct sockaddr_in *server_address)
-{
+int connect(int client_socket, struct sockaddr_in *server_address){
   // Create a SYN packet to initiate the handshake.
   packet syn_packet;
-  syn_packet.seq_num = 54321;
+  syn_packet.seq_num = rand();
   syn_packet.ack_num = 0;
   syn_packet.flags = SYN;
 
@@ -75,17 +71,14 @@ int perform_handshake(int client_socket, struct sockaddr_in *server_address)
 
     int sel = select(client_socket + 1, &read_fds, NULL, NULL, &timeout);
 
-    if (sel < 0)
-    {
-      if (errno == EINTR)
-      {
+    if (sel < 0){
+      if (errno == EINTR){
         continue;
       }
       perror("select(2)");
       break;
     }
-    else if (sel == 0)
-    {
+    else if (sel == 0){
       printf("Timeout. No SYN-ACK received.\n");
       retries++;
       continue;
@@ -97,16 +90,14 @@ int perform_handshake(int client_socket, struct sockaddr_in *server_address)
     int n = recvfrom(client_socket, &received_synack, sizeof(received_synack), 0,
                      (struct sockaddr *)server_address, &len);
 
-    if (n < 0)
-    {
+    if (n < 0){
       perror("recvfrom(2)");
       retries++;
       continue;
     }
 
     // Check for the SYN-ACK flags
-    if ((received_synack.flags & SYN) && (received_synack.flags & ACK))
-    {
+    if ((received_synack.flags & SYN) && (received_synack.flags & ACK)){
       printf("Received SYN-ACK from server. Server Seq: %u, Server Ack: %u\n",
              received_synack.seq_num, received_synack.ack_num);
 
@@ -118,24 +109,20 @@ int perform_handshake(int client_socket, struct sockaddr_in *server_address)
 
       printf("Sending final ACK to server...\n");
       if (sendto(client_socket, &final_ack_packet, sizeof(final_ack_packet), 0,
-                 (const struct sockaddr *)server_address, len) < 0)
-      {
+                 (const struct sockaddr *)server_address, len) < 0){
         perror("sendto(2)");
       }
-      else
-      {
+      else {
         handshake_complete = 1;
         printf("Handshake complete. Connection established!\n");
       }
     }
-    else
-    {
+    else {
       printf("Received an unexpected packet type.\n");
     }
   }
 
-  if (!handshake_complete)
-  {
+  if (!handshake_complete){
     printf("Handshake failed after %d retries. Exiting.\n", MAX_RETRIES);
     return 0;
   }
@@ -144,13 +131,13 @@ int perform_handshake(int client_socket, struct sockaddr_in *server_address)
 }
 
 // Perform four-way handshake to terminate connection
-int terminate_connection(int client_socket, struct sockaddr_in *server_address) {
+int terminate(int client_socket, struct sockaddr_in *server_address) {
   int termination_complete = 0;
   int retries = 0;
 
   // Send FIN packet to initiate termination
   packet fin_packet;
-  fin_packet.seq_num = 54321;
+  fin_packet.seq_num = rand();
   fin_packet.ack_num = 0;
   fin_packet.flags = FIN;
 
@@ -229,32 +216,30 @@ int terminate_connection(int client_socket, struct sockaddr_in *server_address) 
   return 1;
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]){
+  srand(time(NULL));
   int client_socket;
   struct sockaddr_in server_address;
 
   const char *server_ip;
   int server_port;
 
-  if (argc == 3)
-  {
+  if (argc == 3){
     server_ip = argv[1];
     server_port = atoi(argv[2]);
     printf("Using command-line arguments: %s:%d\n", server_ip, server_port);
   }
-  else
-  {
+  else {
     server_ip = SERVER_IP;
     server_port = PORT;
     printf("No arguments provided. Using default values: %s:%d\n", server_ip, server_port);
   }
 
-  if (!initialize_socket(server_ip, server_port, &client_socket, &server_address)){
+  if (!init(server_ip, server_port, &client_socket, &server_address)){
     return 1;
   }
 
-  if (!perform_handshake(client_socket, &server_address)){
+  if (!connect(client_socket, &server_address)){
     close(client_socket);
     return 1;
   }
@@ -262,7 +247,7 @@ int main(int argc, char *argv[])
   // <exchange data>
 
   // Close the connection:
-  if (!terminate_connection(client_socket, &server_address)){
+  if (!terminate(client_socket, &server_address)){
     printf("Failed to gracefully terminate the connection.\n");
   }
 
