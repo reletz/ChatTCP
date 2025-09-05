@@ -14,11 +14,21 @@
 
 #define PORT    12345 
 
-int main(){
+int main(int argc, char *argv[]){
   int server_socket;
   packet received_packet;
   struct sockaddr_in server_address, client_address;
-  
+
+  int server_port;
+
+  if (argc == 2) {
+    server_port = atoi(argv[2]);
+    printf("Using command-line arguments: %d\n", server_port);
+  } else {
+    server_port = PORT;
+    printf("No arguments provided. Using default values: %d\n", server_port);
+  }
+
   // Create a UDP socket. SOCK_DGRAM specifies a datagram socket
   if ((server_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
     perror("socket(2)");
@@ -30,7 +40,7 @@ int main(){
 
   // Fill the server address structure
   server_address.sin_family = AF_INET;
-  server_address.sin_port = htons(PORT);
+  server_address.sin_port = htons(server_port);
   server_address.sin_addr.s_addr = INADDR_ANY;
 
   // Bind the socket to the server address
@@ -40,7 +50,7 @@ int main(){
     return 1;
   };
 
-  printf("Server is listening on port %d...\n", PORT);
+  printf("Server is listening on port %d...\n", server_port);
 
   socklen_t len;
   len = sizeof(client_address);
