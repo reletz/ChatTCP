@@ -141,7 +141,7 @@ void handle_data_exchange(int socket_fd, int server_port, packet *received_packe
   }
 }
 
-// Handle data exchange with flow control (protocol only, no chat functionality)
+// Handle data exchange with flow control
 void handle_data_with_flow_control(int socket_fd, int server_port, packet *received_packet,
                                    struct sockaddr_in *client_address, socklen_t len)
 {
@@ -173,9 +173,6 @@ void handle_data_with_flow_control(int socket_fd, int server_port, packet *recei
 
   // Process the received data using flow control
   printf("Received data packet: %u bytes\n", (unsigned int)strlen(received_packet->payload));
-
-  // Send ACK using flow control mechanism
-  // Protocol implementation only - no echo or chat functionality
 }
 
 // Main server loop
