@@ -19,17 +19,13 @@
 // Initialize socket and set up server address
 int init(const char *server_ip, int server_port, int *client_socket, struct sockaddr_in *server_address, int *local_port)
 {
-  // Create a UDP socket. SOCK_DGRAM specifies a datagram socket.
   if ((*client_socket = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
   {
     perror("socket(2)");
     return 0;
   }
 
-  // Initialize the server address struct with zeros.
   memset(server_address, 0, sizeof(*server_address));
-
-  // Fill the server address structure with the destination information.
   server_address->sin_family = AF_INET;
   server_address->sin_port = htons(server_port);
 
@@ -40,13 +36,12 @@ int init(const char *server_ip, int server_port, int *client_socket, struct sock
     return 0;
   }
 
-  // Get the local port assigned to the socket
   struct sockaddr_in local_address;
   socklen_t len = sizeof(local_address);
   if (getsockname(*client_socket, (struct sockaddr *)&local_address, &len) < 0)
   {
     perror("getsockname(2)");
-    *local_port = 0; // Use ephemeral port
+    *local_port = 0;
   }
   else
   {
@@ -63,7 +58,7 @@ void init_packet(packet *pkt, uint16_t src_port, uint16_t dst_port)
   memset(pkt, 0, sizeof(packet));
   pkt->source_port = src_port;
   pkt->dest_port = dst_port;
-  pkt->data_offset = 5; // 5 x 4 bytes = 20 bytes (standard TCP header size)
+  pkt->data_offset = 5;
   pkt->window_size = 1024;
   pkt->urgent_pointer = 0;
   pkt->payload[0] = '\0';
@@ -297,7 +292,7 @@ int terminate(int client_socket, struct sockaddr_in *server_address, int local_p
   return 1;
 }
 
-// Data exchange with flow control (protocol only, no chat UI)
+// Data exchange with flow control
 int exchange_data(int client_socket, struct sockaddr_in *server_address,
                   int local_port, int server_port)
 {
@@ -307,20 +302,13 @@ int exchange_data(int client_socket, struct sockaddr_in *server_address,
   init_flow_control(&fc_state, client_socket, server_address,
                     local_port, server_port);
 
-  printf("Flow control initialized. Ready for data exchange.\n");
-  printf("This is a protocol-only implementation.\n");
-  printf("The actual chat functionality will be implemented in Python.\n");
-
-  // A simple test message can be sent to verify the protocol works
+  // simple test message
   const char *test_message = "TEST_MESSAGE";
   if (send_data_with_flow_control(&fc_state, test_message, strlen(test_message)) < 0)
   {
     printf("Failed to send test message.\n");
     return 0;
   }
-
-  printf("Test message sent successfully.\n");
-  printf("Protocol implementation ready for use by higher-level applications.\n");
 
   return 1;
 }

@@ -35,6 +35,89 @@ void init_flow_control(flow_control_state *state, int socket_fd,
   apply_congestion_window(&cc_state, state);
 }
 
+// Receive data with flow control
+int receive_data_with_flow_control(flow_control_state *state,
+                                   char *buffer, size_t buffer_size,
+                                   size_t *bytes_received)
+{
+  packet received_packet;
+  socklen_t addr_len = state->addr_len;
+
+  printf("Waiting to receive data with flow control...\n");
+
+  fd_set read_fds;
+  struct timeval timeout;
+  FD_ZERO(&read_fds);
+  FD_SET(state->socket_fd, &read_fds);
+  timeout.tv_sec = 2;
+  timeout.tv_usec = 0;
+
+  if (select(state->socket_fd + 1, &read_fds, NULL, NULL, &timeout) <= 0)
+  {
+    printf("Timeout waiting for data packet\n");
+    return -1;
+  }
+
+  int bytes = recvfrom(state->socket_fd, &received_packet, sizeof(received_packet), 0,
+                       (struct sockaddr *)&state->peer_addr, &addr_len);
+
+  if (bytes < 0)
+  {
+    perror("recvfrom failed");
+    return -1;
+  }
+
+  printf("Received packet with flags=0x%x, seq=%u\n",
+         received_packet.flags, received_packet.seq_num);
+
+  // Verify checksum
+  uint16_t received_checksum = received_packet.checksum;
+  received_packet.checksum = 0;
+  if (calculate_checksum(&received_packet) != received_checksum)
+  {
+    printf("Checksum verification failed\n");
+    return 0;
+  }
+
+  if (strlen(received_packet.payload) > 0)
+  {
+    size_t payload_len = strlen(received_packet.payload);
+
+    if (payload_len > buffer_size)
+    {
+      payload_len = buffer_size;
+    }
+
+    memcpy(buffer, received_packet.payload, payload_len);
+    *bytes_received = payload_len;
+
+    // Send ACK
+    packet ack_packet;
+    memset(&ack_packet, 0, sizeof(packet));
+    ack_packet.source_port = state->local_port;
+    ack_packet.dest_port = state->remote_port;
+    ack_packet.seq_num = state->next_seq_num;
+    ack_packet.ack_num = received_packet.seq_num + payload_len;
+    ack_packet.data_offset = 5;
+    ack_packet.flags = ACK;
+    ack_packet.window_size = state->current_window;
+    ack_packet.checksum = calculate_checksum(&ack_packet);
+
+    if (sendto(state->socket_fd, &ack_packet, sizeof(ack_packet), 0,
+               (struct sockaddr *)&state->peer_addr, addr_len) < 0)
+    {
+      perror("sendto failed");
+      return -1;
+    }
+
+    state->last_ack_received = received_packet.seq_num + payload_len;
+
+    return payload_len;
+  }
+
+  return 0;
+}
+
 // Helper function to initialize a packet for data transfer
 static void prepare_data_packet(packet *pkt, flow_control_state *state,
                                 const char *data, size_t len)
@@ -44,12 +127,14 @@ static void prepare_data_packet(packet *pkt, flow_control_state *state,
   pkt->dest_port = state->remote_port;
   pkt->seq_num = state->next_seq_num;
   pkt->ack_num = state->last_ack_received;
-  pkt->data_offset = 5;
-  pkt->flags = PSH;
+  pkt->data_offset = 5; // Standard TCP header size (5 * 4 bytes)
+  pkt->flags = PSH;     // Push data flag
   pkt->window_size = state->current_window;
   pkt->urgent_pointer = 0;
 
+  // Copy data to payload, ensuring we don't exceed MAX_PAYLOAD_SIZE
   size_t copy_len = (len > MAX_PAYLOAD_SIZE) ? MAX_PAYLOAD_SIZE : len;
+  printf("Preparing data packet: copying %zu bytes to payload\n", copy_len);
   memcpy(pkt->payload, data, copy_len);
   pkt->payload[copy_len] = '\0';
 
@@ -117,8 +202,8 @@ int send_data_with_flow_control(flow_control_state *state,
     packet data_packet;
     prepare_data_packet(&data_packet, state, data + bytes_sent, chunk_size);
 
-    printf("Sending %zu bytes, seq=%u, window=%u, cwnd=%u\n",
-           chunk_size, state->next_seq_num, state->current_window, cc_state.cwnd);
+    printf("Sending %zu bytes, seq=%u, window=%u, payload='%s'\n",
+           chunk_size, state->next_seq_num, state->current_window, data_packet.payload);
 
     if (sendto(state->socket_fd, &data_packet, sizeof(data_packet), 0,
                (struct sockaddr *)&state->peer_addr, state->addr_len) < 0)
@@ -223,100 +308,6 @@ int send_data_with_flow_control(flow_control_state *state,
 
   printf("All data sent successfully.\n");
   return data_len;
-}
-
-// Receive data with flow control
-int receive_data_with_flow_control(flow_control_state *state,
-                                   char *buffer, size_t buffer_size,
-                                   size_t *bytes_received)
-{
-  packet received_packet;
-  socklen_t addr_len = state->addr_len;
-
-  printf("Waiting to receive data with flow control...\n");
-
-  // Use a timeout for the receive operation
-  fd_set read_fds;
-  struct timeval timeout;
-  FD_ZERO(&read_fds);
-  FD_SET(state->socket_fd, &read_fds);
-  timeout.tv_sec = 2;
-  timeout.tv_usec = 0;
-
-  if (select(state->socket_fd + 1, &read_fds, NULL, NULL, &timeout) <= 0)
-  {
-    printf("Timeout waiting for data packet\n");
-    return -1;
-  }
-
-  // Wait for incoming data
-  int bytes = recvfrom(state->socket_fd, &received_packet, sizeof(received_packet), 0,
-                       (struct sockaddr *)&state->peer_addr, &addr_len);
-
-  if (bytes < 0)
-  {
-    perror("recvfrom(2) failed in flow control");
-    return -1;
-  }
-
-  printf("Received packet with flags=0x%x, seq=%u\n",
-         received_packet.flags, received_packet.seq_num);
-
-  // Verify checksum
-  uint16_t received_checksum = received_packet.checksum;
-  received_packet.checksum = 0;
-  if (calculate_checksum(&received_packet) != received_checksum)
-  {
-    printf("Checksum verification failed. Packet might be corrupted.\n");
-    return 0;
-  }
-
-  // Check if this is a data packet
-  if (received_packet.flags & PSH)
-  {
-    // Copy data to buffer
-    size_t payload_len = strlen(received_packet.payload);
-    if (payload_len > buffer_size)
-    {
-      payload_len = buffer_size;
-    }
-
-    memcpy(buffer, received_packet.payload, payload_len);
-    *bytes_received = payload_len;
-
-    printf("Received data packet with %zu bytes, sending ACK\n", payload_len);
-
-    // Send ACK
-    packet ack_packet;
-    memset(&ack_packet, 0, sizeof(packet));
-    ack_packet.source_port = state->local_port;
-    ack_packet.dest_port = state->remote_port;
-    ack_packet.seq_num = state->next_seq_num;
-    ack_packet.ack_num = received_packet.seq_num + payload_len;
-    ack_packet.data_offset = 5;
-    ack_packet.flags = ACK;
-    ack_packet.window_size = state->current_window;
-    ack_packet.checksum = calculate_checksum(&ack_packet);
-
-    if (sendto(state->socket_fd, &ack_packet, sizeof(ack_packet), 0,
-               (struct sockaddr *)&state->peer_addr, addr_len) < 0)
-    {
-      perror("sendto(2) failed in flow control");
-      return -1;
-    }
-
-    // Update last received sequence number
-    state->last_ack_received = received_packet.seq_num + payload_len;
-
-    return payload_len;
-  }
-  else
-  {
-    printf("Received non-data packet (flags=0x%x)\n", received_packet.flags);
-  }
-
-  // Not a data packet
-  return 0;
 }
 
 // Update flow control state based on received ACK

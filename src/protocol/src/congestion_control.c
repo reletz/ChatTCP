@@ -15,8 +15,7 @@ void init_congestion_control(congestion_control_state *cc_state, uint16_t mss)
 
   printf("Congestion control initialized: cwnd=%u, ssthresh=%u, state=%s\n",
          cc_state->cwnd, cc_state->ssthresh,
-         cc_state->state == SLOW_START ? "SLOW_START" : cc_state->state == CONGESTION_AVOIDANCE ? "CONGESTION_AVOIDANCE"
-                                                                                                : "FAST_RECOVERY");
+         cc_state->state == SLOW_START ? "SLOW_START" : cc_state->state == CONGESTION_AVOIDANCE ? "CONGESTION_AVOIDANCE" : "FAST_RECOVERY");
 }
 
 // Update congestion window based on received ACK

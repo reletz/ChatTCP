@@ -10,8 +10,8 @@ int test_data_transfer()
   struct sockaddr_in server_addr, client_addr;
   flow_control_state client_fc, server_fc;
   congestion_control_state cc_state;
-  // Use a smaller test message that fits in a single packet
-  char test_data[] = "Test message";
+
+  char test_data[] = "TEST";
   char receive_buffer[MAX_PAYLOAD_SIZE + 1];
   size_t bytes_received;
   int client_port = TEST_PORT_BASE + 6;
@@ -19,12 +19,22 @@ int test_data_transfer()
 
   printf("Setting up test sockets...\n");
 
-  // Create sockets
   client_sock = create_test_socket(client_port);
   server_sock = create_test_socket(server_port);
 
   ASSERT_TRUE(client_sock >= 0);
   ASSERT_TRUE(server_sock >= 0);
+
+  // Set socket options to enable address reuse
+  int reuse = 1;
+  if (setsockopt(client_sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+  {
+    perror("setsockopt client SO_REUSEADDR");
+  }
+  if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+  {
+    perror("setsockopt server SO_REUSEADDR");
+  }
 
   // Set timeout for socket operations
   struct timeval socket_timeout;
@@ -123,6 +133,10 @@ int test_data_transfer()
 
   // Verify data integrity
   ASSERT_STRING_EQUAL(test_data, receive_buffer);
+
+  // Dump packet details for debugging
+  printf("Server initialization complete. Client port: %d, Server port: %d\n",
+         client_port, server_port);
 
   return TEST_PASS;
 }

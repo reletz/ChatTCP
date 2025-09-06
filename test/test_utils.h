@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <errno.h>
 
 #include "packet.h"
 #include "flow_control.h"
@@ -68,6 +69,7 @@
   } while (0)
 
 // Test setup helpers
+// Create a test socket with better error handling
 int create_test_socket(int port)
 {
   int sock;
@@ -79,6 +81,13 @@ int create_test_socket(int port)
     return -1;
   }
 
+  // Enable address reuse
+  int reuse = 1;
+  if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+  {
+    perror("setsockopt SO_REUSEADDR");
+  }
+
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_port = htons(port);
@@ -87,10 +96,12 @@ int create_test_socket(int port)
   if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
   {
     perror("bind failed");
+    printf("Failed to bind to port %d. Error: %s\n", port, strerror(errno));
     close(sock);
     return -1;
   }
 
+  printf("Test socket created and bound to port %d\n", port);
   return sock;
 }
 
